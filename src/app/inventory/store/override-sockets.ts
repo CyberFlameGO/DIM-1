@@ -1,6 +1,8 @@
 import { D2ManifestDefinitions } from 'app/destiny2/d2-definitions';
 import { DEFAULT_ORNAMENTS } from 'app/search/d2-known-values';
 import { errorLog } from 'app/utils/log';
+import { getSocketsByCategoryHash } from 'app/utils/socket-utils';
+import { BucketHashes, SocketCategoryHashes } from 'data/d2/generated-enums';
 import produce from 'immer';
 import _ from 'lodash';
 import { useCallback, useState } from 'react';
@@ -30,7 +32,7 @@ export function applySocketOverrides(
 
   let icon = item.icon;
 
-  const sockets = item.sockets.allSockets.map((s): DimSocket => {
+  const allSockets = item.sockets.allSockets.map((s): DimSocket => {
     const override = socketOverrides[s.socketIndex];
 
     // We need to shallow-clone all the plugs because the stats process will re-set them!
@@ -93,12 +95,45 @@ export function applySocketOverrides(
     };
   });
 
+  const overriddenSockets = {
+    ...item.sockets,
+    allSockets,
+  };
+
+  // If the item is a subclass with sockets, calculate the active fragments from aspects and remove
+  // any that are either disabled or
+  if (item.bucket.hash === BucketHashes.Subclass) {
+    const aspects = getSocketsByCategoryHash(overriddenSockets, SocketCategoryHashes.Aspects);
+    let activeFragments = 0;
+    for (const aspect of aspects) {
+      activeFragments += aspect.plugged?.plugDef.plug.energyCapacity?.capacityValue || 0;
+    }
+
+    const fragments = getSocketsByCategoryHash(overriddenSockets, SocketCategoryHashes.Fragments);
+    for (const fragment of fragments) {
+      // if the fragment is active and we have an override for it, we leave it along as it has already
+      // been overridden
+      if (activeFragments > 0 && socketOverrides[fragment.socketIndex]) {
+        activeFragments--;
+      } else {
+        // Force the socket to have an empty plug. This happen when a fragment has no override or when
+        // the fragment is disabled due to a lack of aspect "energy". It's worth noting here that there
+        // are a number of empty plugs for fragments, I found that half were being forced even though
+        // they were empty due to differing plug hashes, it doesn't hurt to just force them all.
+        fragment.actuallyPlugged = fragment.plugged || undefined;
+        fragment.plugged =
+          fragment.plugSet?.plugs.find((p) => p.plugDef.hash === fragment.emptyPlugItemHash) ||
+          null;
+      }
+    }
+  }
+
   const updatedItem: DimItem = {
     ...item,
     icon,
     sockets: {
       ...item.sockets,
-      allSockets: sockets,
+      allSockets,
     },
   };
 
